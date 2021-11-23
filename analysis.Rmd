@@ -124,16 +124,19 @@ distance_mat_fun <- function(tree.ds, meta.ds){
     group_by(sero1, sero2) %>%
     arrange(distance, .by_group = TRUE) %>%
     mutate(distance_rank = 1:n())
-
-  }
   
-return(closest_match[closest_match$distance_rank==1,])
+    return(closest_match[closest_match$distance_rank==1,])
   }else{
     return(NULL)
   }
 }
 
-all_switches <- pbmapply(FUN=distance_mat_fun, tree.ds=trees,meta.ds=grp.assign200, SIMPLIFY = F)
+
+all_switches.ls <- pbmapply(FUN=distance_mat_fun, tree.ds=trees,meta.ds=grp.assign200, SIMPLIFY = F)
+
+all_switches <- bind_rows(all_switches.ls)
+
+write.csv(all_switches, './results/all_switches.csv' )
 ```
 
 
