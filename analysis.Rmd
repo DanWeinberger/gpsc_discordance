@@ -91,6 +91,12 @@ Generate a distance matrix based on the phylogenetic tree. Then identify the clo
 ```{r}
 distance_mat_fun <- function(tree.ds, meta.ds){
   
+  # for(i in 1:length(trees)){
+  #   
+  # tree.ds=trees[[i]]
+  # meta.ds=grp.assign200[[i]]
+  # print(i)
+  
   dist.t1 <- cophenetic.phylo(tree.ds)
   dist.t1.m <- reshape2::melt(dist.t1)
   
@@ -113,12 +119,18 @@ distance_mat_fun <- function(tree.ds, meta.ds){
   #   group_by(change_st) %>%
   #   summarize(ave_dist=mean(distance))
   
+  if(sum(dist.t1.m$change_st)>0){
   closest_match <- dist.t1.m[dist.t1.m$change_st==1,] %>%
     group_by(sero1, sero2) %>%
     arrange(distance, .by_group = TRUE) %>%
     mutate(distance_rank = 1:n())
 
+  }
+  
 return(closest_match[closest_match$distance_rank==1,])
+  }else{
+    return(NULL)
+  }
 }
 
 all_switches <- pbmapply(FUN=distance_mat_fun, tree.ds=trees,meta.ds=grp.assign200, SIMPLIFY = F)
