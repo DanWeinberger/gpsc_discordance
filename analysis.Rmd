@@ -178,7 +178,11 @@ compare.fun <- function(switchN){
 unique.genes.ls <- lapply(1:nrow(all_switches2), compare.fun)
 unique.genes <- bind_rows(unique.genes.ls)
 
-sort(table(unique.genes$Annotation), decreasing=T)
+#sort(table(unique.genes$Annotation), decreasing=T)
 
+cog_freq <- unique.genes %>%
+    group_by(Gene, Annotation) %>%
+    summarise('cog_freq'=n()) %>%
+    arrange(desc(cog_freq))
 ```
 
