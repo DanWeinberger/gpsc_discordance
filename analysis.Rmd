@@ -38,8 +38,8 @@ trees <- vector("list",length(gpcs.test))
 trees.to.cut <- vector("list",length(gpcs.test))
 
 for(i in 1:length(gpcs.test)){
-  trees[[i]]<-ape::read.tree(paste0("microreact/tree_gpcs",gpcs[i],".nwk"))
-  trees.to.cut[[i]]<-read.dendrogram(paste0("microreact/tree_gpcs",gpcs[i],".nwk"))
+  trees[[i]]<-ape::read.tree(paste0("microreact/tree_gpcs",gpcs.test[i],".nwk"))
+  trees.to.cut[[i]]<-read.dendrogram(paste0("microreact/tree_gpcs",gpcs.test[i],".nwk"))
 
 }  
 ```
@@ -48,7 +48,7 @@ for(i in 1:length(gpcs.test)){
 ```{r}
 metads <- vector("list",length(gpcs.test))
 for(i in 1:length(gpcs.test)){
-  metads[[i]]<-read.csv(paste0("microreact/data_gpcs",gpcs[i],".csv"))
+  metads[[i]]<-read.csv(paste0("microreact/data_gpcs",gpcs.test[i],".csv"))
 } 
 ```
 
@@ -63,7 +63,7 @@ tree.cutter<-function(tree.list, cutpoint){
   return(test3)
 }
 
-tree.grps200<-lapply(trees.to.cut,tree.cutter,cutpoint=200)
+tree.grps200<-lapply(trees.to.cut,tree.cutter,cutpoint=100)
 
 ```
 
@@ -139,5 +139,13 @@ all_switches <- bind_rows(all_switches.ls)
 write.csv(all_switches, './results/all_switches.csv' )
 ```
 
+Read in presence/absence
+```{r}
 
+# a1 <- read.csv('./Data/gene_presence_absence_minimised.csv')
+# saveRDS(a1,'./Data/gene_presence_absence_minimised.rds')
+
+a1 <- readRDS('./Data/gene_presence_absence_minimised.rds')
+
+```
 
