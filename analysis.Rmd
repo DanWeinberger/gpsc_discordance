@@ -250,7 +250,7 @@ cog_freq <- unique.genes %>%
 
 #this evaluates how often we see discordance in the locus if closest neighbor is a ST switch or not.
 
-cog_freq.c <- reshape2::dcast(cog_freq, Gene+Annotation ~ change_serogrp) %>%
+cog_freq.c <- reshape2::dcast(D, Gene+Annotation ~ change_serogrp) %>%
   filter(sg_change_1 + sg_change_0 >=20) %>%
   mutate(ratio= (sg_change_1/sum(all_switches2$change_serogrp==1))/(sg_change_0/sum(all_switches2$change_serogrp==0))) %>%
   arrange(-ratio)
@@ -258,6 +258,14 @@ cog_freq.c <- reshape2::dcast(cog_freq, Gene+Annotation ~ change_serogrp) %>%
 View(cog_freq.c)
 
 
+cog_freq.c.filtered <- cog_freq.c %>%
+  mutate(phage=grepl('phage',Annotation),
+         hypothetical=grepl('hypothetical',Annotation),
+         transposase=grepl('transposase',Annotation),
+         caps= grepl('caps',Annotation) + grepl('WZ',toupper(Annotation)) + grepl('WC',toupper(Annotation))
+         
+         ) %>%
+  filter(phage==0 & hypothetical==0 & transposase==0 & caps==0 )
 
 ```
 Interesting ones:
@@ -291,7 +299,7 @@ UDP-galactopyranose mutase
 
 
 ```{r}
-glyc <- a1 %>% filter(Gene=='lacG') %>%
+glyc <- a1 %>% filter(Gene=='zmpC') %>%
   select(starts_with("X")) %>%
   t() %>%
   as.data.frame() 
@@ -337,8 +345,8 @@ write.csv(t1,'./results/sperm_presence.csv')
 pull out spermidine  discordant pairs
 ```{r}
 glyc3 <- unique.genes %>%
-  filter(Gene=='lacG' & stA != stB) %>%
-  select(Gene,stA, Gene_Pres_A,stB,Gene_Pres_B)
+  filter(Gene=='zmpC' & stA != stB) %>%
+  select(Gene,stA, Gene_Pres_A,stB,Gene_Pres_B, idA, idB)
 
 glyc3 <- merge(glyc3, ps_comp, by.x='stA', by.y='Serotype')
 glyc3 <- merge(glyc3, ps_comp, by.x='stB', by.y='Serotype')
@@ -348,4 +356,57 @@ View(glyc3)
 write.csv(glyc3,'./results/sperm_pairings.csv')
 
 ```
+
+
+Regression
+should also adjust for distance
+```{r}
+unique.genes2 <- unique.genes %>%
+  mutate(gene_change = if_else(Gene_Pres_A!= Gene_Pres_B,1,0), 
+         Annotation=toupper(Annotation), 
+         Gene=toupper(Gene),
+         Non.unique.Gene.name=toupper(Non.unique.Gene.name),
+         gene.annotate = paste(Gene,Non.unique.Gene.name, Annotation )) %>%
+    mutate(phage=grepl('phage',gene.annotate),
+         hypothetical=grepl('HYPOTHETICAL',gene.annotate),
+         transposase=grepl('TRANSPOSASE',gene.annotate),
+         caps= grepl('CAPS',gene.annotate) + grepl('WZ',gene.annotate) + grepl('CPS',gene.annotate) + grepl('WC', gene.annotate) + grepl('RML',gene.annotate) + grepl('MNA',gene.annotate) + grepl('UGD',gene.annotate) + grepl('GLF',gene.annotate) 
+         
+         ) %>%
+  filter(phage==0 & hypothetical==0 & transposase==0 & caps==0 ) %>%
+  select(idA, idB, stA, stB,Gene,gene_change, change_serogrp,Annotation,Non.unique.Gene.name) %>%
+  group_by(Gene) %>%
+  mutate(geneN =n()) %>%
+  filter(geneN>=20)
+
+  unique.genes2.c <- dcast(unique.genes2, idA+ idB+ stA+ stB +change_serogrp ~ Gene , value.var='gene_change') %>%
+    replace(is.na(.), 0)
+  
+  x <- as.matrix(unique.genes2.c[,-c(1:5)])
+  y <- unique.genes2.c$change_serogrp
+  
+  library(glmnet)
+  
+  #ridge regression
+cv.lasso <- cv.glmnet(x, y, family = "binomial",type.measure="class", nfolds=10)
+
+#plot(cv.lasso)
+
+mod1 <- glmnet(x,y, family='binomial', alpha=0, lambda=cv.lasso$lambda.min ) #alpha=0 is ridge regression
+
+# Display regression coefficients
+gene_key <- unique.genes2 %>%
+  select(Annotation, Non.unique.Gene.name, Gene) %>%
+  unique()
+
+coefs.mod1 <- cbind.data.frame('coef'=coef(mod1)[,1], 'Gene'=row.names(coef(mod1))) %>%
+  left_join(gene_key, by='Gene') %>%
+  arrange(-coef)
+
+View(coefs.mod1)
+
+write.csv(coefs.mod1, './Results/ridge_coefficients.csv')
+
+```
+
 
