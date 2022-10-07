@@ -155,6 +155,8 @@ Read in presence/absence
 
 
 
+## NOTES
+For this analysis, consider a within-serogroup switch as same as a pair of same serotype. This contributes to background level of exchange but not likely under metabolic selection due to similarities in CPS
 ```{r}
 
 # a1 <- read.csv('./Data/gene_presence_absence_minimised.csv')
@@ -175,13 +177,21 @@ uniqueIds <- apply(all_switches2,1, function(x){
 
 all_switches2 <- cbind.data.frame(all_switches2,'uniqueIds'=uniqueIds)
 
+  regexp <- "[[:digit:]]+"
+
 all_switches2 <- all_switches2 %>%
   group_by(uniqueIds) %>%
   mutate(pair_rep=row_number(),
          ID1= gsub("\\'","",ID1),
          ID2= gsub("\\'","",ID2)) %>%
     ungroup() %>%
- filter(pair_rep==1) 
+ filter(pair_rep==1) %>%
+  mutate(sg1 = str_extract(sero1, regexp),
+         sg2 = str_extract(sero2, regexp),
+        sg1= if_else(sero1=='NT', 'NT', sg1),
+        sg2= if_else(sero2=='NT', 'NT', sg2),
+                 change_serogrp = if_else(sg1!=sg2,1,0)
+         )
 
 # gene_freqN <- apply(a1[, -c(1:15)],1, sum, na.rm=T) #These are the very common or very rare genes, NOT the intermediate freq
 # 
@@ -196,11 +206,8 @@ compare.fun <- function(switchN){
   
   col.strain2 <- grep( paste0(all_switches2$ID2[switchN],'.velvet'),colnames(a1))
 
-  regexp <- "[[:digit:]]+"
 
-  sg1 <- str_extract(all_switches2$sero1[switchN], regexp)
-  sg2 <- str_extract(all_switches2$sero2[switchN], regexp)  
-  
+
   b1 <- a1 %>%
     select(Gene,Non.unique.Gene.name,Annotation, all_of(col.strain1),all_of(col.strain2)) 
    
@@ -208,15 +215,20 @@ compare.fun <- function(switchN){
   b1$stA =all_switches2$sero1[switchN]
   b1$stB =all_switches2$sero2[switchN]
   
+  b1$sgA <- all_switches2$sg1[switchN]
+  b1$sgB <- all_switches2$sg2[switchN]
+  
   b1$idA =colnames(a1)[col.strain1]
   b1$idB =colnames(a1)[col.strain2]
+  
+  b1$change_serogrp <- 1*(b1$sgA != b1$sgB )
+
 
   if(nrow(b1)>0){
       names(b1)[4:5] =  c('Gene_Pres_A', 'Gene_Pres_B')
        b1[,4][is.na(b1[,4])] <-   0
       b1[,5][is.na(b1[,5])] <-   0
     c1 <- b1[b1[,4] != b1[,5] & !is.na(b1[,4]), ]
-    c1$change_serogrp <- 1*(sg1 != sg2 )
   }else{
     c1 <- NULL
   }
@@ -231,16 +243,16 @@ unique.genes <- bind_rows(unique.genes.ls)
 
 cog_freq <- unique.genes %>%
   mutate(change_st= if_else(stA!=stB,1,0)) %>%
-    group_by(Gene, Annotation,change_st) %>%
+    group_by(Gene, Annotation, change_serogrp) %>%
     summarise('cog_freq'=n()) %>%
     arrange(desc(cog_freq)) %>%
-    mutate(change_st= paste0('st_change_', change_st))
+    mutate(change_serogrp= paste0('sg_change_', change_serogrp))
 
 #this evaluates how often we see discordance in the locus if closest neighbor is a ST switch or not.
 
-cog_freq.c <- reshape2::dcast(cog_freq, Gene+Annotation ~ change_st) %>%
-  filter(st_change_1 + st_change_0 >=20) %>%
-  mutate(ratio= (st_change_1/sum(all_switches2$change_st==1))/(st_change_0/sum(all_switches2$change_st==0))) %>%
+cog_freq.c <- reshape2::dcast(cog_freq, Gene+Annotation ~ change_serogrp) %>%
+  filter(sg_change_1 + sg_change_0 >=20) %>%
+  mutate(ratio= (sg_change_1/sum(all_switches2$change_serogrp==1))/(sg_change_0/sum(all_switches2$change_serogrp==0))) %>%
   arrange(-ratio)
 
 View(cog_freq.c)
@@ -253,7 +265,9 @@ Interesting ones:
 group_11429 spermidine synthase found in 53 SG changes, 1 non SG change; This is part of polyamine biosynthesis, which has been linked to CPS expression https://www.ncbi.nlm.nih.gov/pmc/articles/PMC5872165/
 for other related compounds " Characterization of ΔspeA indicates reduced galactose to glucose interconversion via the Leloir pathway. This in turn will limit the availability of UDP-galactose, a precursor of serotype 4 CPS, and UDP-N-acetylglucosamine (UDP-GlcNAc), a nucleotide sugar precursor that is at the intersection of CPS and peptidoglycan repeat unit biosynthesis" https://www.ncbi.nlm.nih.gov/pmc/articles/PMC7990898/
 
-** check if GlcNAC or Gal are more common with Spermidine genes
+also, relatedly: potD_2
+
+
 
 group_16274 family 2 glycosyl transferase
 
@@ -269,9 +283,15 @@ lacG 	 6-phospho-beta-galactosidase (also group_9715)
 lacE-2
 lacT
 
+ald_2 alanine dehydrogenase
+
+murC_1 UDP-N-acetylmuramate--L-alanine ligase
+
+UDP-galactopyranose mutase
+
 
 ```{r}
-glyc <- a1 %>% filter(Gene=='potD_2') %>%
+glyc <- a1 %>% filter(Gene=='lacG') %>%
   select(starts_with("X")) %>%
   t() %>%
   as.data.frame() 
@@ -317,7 +337,7 @@ write.csv(t1,'./results/sperm_presence.csv')
 pull out spermidine  discordant pairs
 ```{r}
 glyc3 <- unique.genes %>%
-  filter(Gene=='potD_2') %>%
+  filter(Gene=='lacG' & stA != stB) %>%
   select(Gene,stA, Gene_Pres_A,stB,Gene_Pres_B)
 
 glyc3 <- merge(glyc3, ps_comp, by.x='stA', by.y='Serotype')
