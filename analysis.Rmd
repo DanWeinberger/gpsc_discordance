@@ -47,6 +47,12 @@ for(i in 1:length(gpcs.test)){
   trees.to.cut[[i]]<-read.dendrogram(paste0("microreact/tree_gpcs",gpcs.test[i],".nwk"))
 
 }  
+
+
+for(i in 1:length(trees)){
+  print(i)
+print( grep("9789_3#60", trees$tip.label))
+}
 ```
 
 ### Import the metadata
@@ -55,44 +61,29 @@ for(i in 1:length(gpcs.test)){
 metads <- vector("list",length(gpcs.test))
 
 for(i in 1:length(gpcs.test)){
-  metads[[i]]<-read.csv(paste0("microreact/data_gpcs",gpcs.test[i],".csv"))
+  metads[[i]]<-read.csv(paste0("microreact/data_gpcs",gpcs.test[i],".csv")) %>%
+      select(ID, In_Silico_Serotype,GPSC) %>%
+    rename(phylo.grp=GPSC)%>%
+     mutate (ID=as.character(ID), In_Silico_Serotype= as.character(In_Silico_Serotype))
 } 
+
+metads.df <- bind_rows(metads)
 ```
 
 ## classify the samples based on a cutpoint
 ```{r}
-tree.cutter<-function(tree.list, cutpoint){
-  test1<-as_hclust_fixed(tree.list)
-  test2<-cutree(test1, h=cutpoint)
-  test3<-as.data.frame(test2)
-  names(test3)<-'tree.grp'
-  test3$ID<-row.names(test3)
-  return(test3)
-}
-
-tree.grps200<-lapply(trees.to.cut,tree.cutter,cutpoint=100)
+# tree.cutter<-function(tree.list, cutpoint){
+#   test1<-as_hclust_fixed(tree.list)
+#   test2<-cutree(test1, h=cutpoint)
+#   test3<-as.data.frame(test2)
+#   names(test3)<-'tree.grp'
+#   test3$ID<-row.names(test3)
+#   return(test3)
+# }
+# 
+# tree.grps200<-lapply(trees.to.cut,tree.cutter,cutpoint=100)
 
 ```
-
-## Merge in with meta data
-```{r}
-metads<-lapply(metads, function(x){
-  x$ID<-as.character(x$ID)
-  return(x)
- })
-
-meta.merge<-function(tree.ds, meta.ds){
-  test1<-merge(tree.ds, meta.ds, by='ID')
-  test1$phylo.grp<-paste(test1$GPSC, test1$tree.grp, sep='_')
-  test1$In_Silico_Serotype<-as.character(test1$In_Silico_Serotype)
-  test1<-test1[,c('ID', 'In_Silico_Serotype','phylo.grp','In_Silico_Serotype' )]
-  return(test1)
-}
-
-grp.assign200<-mapply(meta.merge,tree.ds=tree.grps200, meta.ds=metads , SIMPLIFY=F)
-#phylo.grps200<- do.call('rbind.data.frame',grp.assign200)
-```
-
 
 Distance matrix
 Generate a distance matrix based on the phylogenetic tree. Then identify the closest neighbors of switched variants on same part of the tree (based on the tree.cut)
@@ -101,55 +92,53 @@ Generate a distance matrix based on the phylogenetic tree. Then identify the clo
 distance_mat_fun <- function(tree.ds, meta.ds){
   
   # for(i in 1:length(trees)){
-  #   
+  # 
   # tree.ds=trees[[i]]
-  # meta.ds=grp.assign200[[i]]
+  # meta.ds=metads[[i]]
   # print(i)
   
   dist.t1 <- cophenetic.phylo(tree.ds)
-  dist.t1.m <- reshape2::melt(dist.t1)
+  dist.t1.m <- reshape2::melt(dist.t1) %>%
+    mutate(Var1= gsub("\\'","", Var1),
+           Var2= gsub("\\'","", Var2)) %>%
+     left_join( meta.ds,  by = c("Var1" = "ID")) %>%
+  left_join(  meta.ds, by = c("Var2" = "ID")) %>%
+    rename(ID1=Var1, ID2=Var2, distance=value,sero1=In_Silico_Serotype.x, sero2=In_Silico_Serotype.y,
+         phylo_grp1=phylo.grp.x, phylo_grp2=phylo.grp.y  ) %>%
+          mutate( change_st = if_else(sero1 != sero2,1,0))%>%
+              filter(distance>0 )  #keep if change ST, remove diagonal
+
+  closest_match_no_switch <- dist.t1.m %>%
+    filter(sero1 == sero2) %>%
+    arrange(ID1, sero1, sero2,distance, .by_group = TRUE) %>%
+    group_by(ID1, sero1) %>%
+      mutate(distance_rank = 1:n(), sero1=as.character(sero1), sero2=as.character(sero2)) %>%
+    filter(distance_rank==1 )
+     
+  if( sum(dist.t1.m$change_st)>0 ){
+  closest_match_st_switch <- dist.t1.m %>%
+    filter(sero1 != sero2) %>%
+    arrange(ID1, sero1, sero2,distance, .by_group = TRUE) %>%
+    group_by(ID1, sero1) %>%
+      mutate(distance_rank = 1:n(), sero1=as.character(sero1), sero2=as.character(sero2)) %>%
+    filter(distance_rank==1 )
   
-  dist.t1.m <- merge(dist.t1.m, meta.ds[,c('ID','In_Silico_Serotype',"phylo.grp")], by.x='Var1', by.y='ID', all.x=T)
-  dist.t1.m <- merge(dist.t1.m, meta.ds[,c('ID','In_Silico_Serotype',"phylo.grp")], by.x='Var2', by.y='ID', all.x=T)
-  names(dist.t1.m) <- c('ID2','ID1','distance','sero1','phylo_grp1', 'sero2','phylo_grp2')
+    closest_match <- bind_rows(closest_match_st_switch,closest_match_no_switch)
   
-  dist.t1.m <- dist.t1.m[dist.t1.m$phylo_grp1 == dist.t1.m$phylo_grp2 , ] #only consider pairs on same part of the tree
-  
-  dist.t1.m$change_st <- 1*(dist.t1.m$sero1!=dist.t1.m$sero2)
-  
-  dist.t1.m <- dist.t1.m[dist.t1.m$distance>0,] #remove diagonal from the distance matrix
-  
- # hist(dist.t1.m$distance)
-  
-  
-  #dist2 <- dist.t1.m[dist.t1.m$distance<200,] #restrict to more closely-related strains
-  
-  # ave_dist <- dist2 %>%
-  #   group_by(change_st) %>%
-  #   summarize(ave_dist=mean(distance))
-  
-  dist.t1.m$change_st[is.na(dist.t1.m$change_st)] <- -1 #fixes issue with NAs
-  
-  if(sum(dist.t1.m$change_st)>0){
-  closest_match <- dist.t1.m %>%
-    filter(change_st==1) %>%
-    arrange(sero1, sero2,distance, .by_group = TRUE) %>%
-    group_by(sero1, sero2) %>%
-      mutate(distance_rank = 1:n()) %>%
-    filter(distance_rank==1 & distance <0.01)
-  
-    return(closest_match)
   }else{
-    return(NULL)
+   closest_match <- closest_match_no_switch
+
   }
+    return(closest_match)
+ 
 }
 
 
 #to check, look at phylo group=30; 28th on the list
 
-all_switches.ls <- pbmapply(FUN=distance_mat_fun, tree.ds=trees,meta.ds=grp.assign200, SIMPLIFY = F)
+all_switches.ls <- pbmapply(FUN=distance_mat_fun, tree.ds=trees,meta.ds=metads, SIMPLIFY = F)
 
-all_switches <- bind_rows(all_switches.ls)
+all_switches <- bind_rows(all_switches.ls) #there are more than 13K because some strains show up in column A both for ST switch and non-ST switch
 
 write.csv(all_switches, './results/all_switches.csv' )
 ```
@@ -176,7 +165,8 @@ a1 <- readRDS('./Data/gene_presence_absence_minimised.rds') #this dataset has AL
  
 #Identify and deduplicate StA=1, STB=2 vs StA=2 STB=1 
 all_switches2 <- all_switches %>%
-  mutate(ID1 =  gsub('#','.',ID1), ID2 = gsub('#','.',ID2) )
+  mutate(ID1 =  gsub('#','.',ID1), ID2 = gsub('#','.',ID2) ) %>%
+  filter(distance < 1) #THIS FILTER IS VERY IMPORTANT!!! Otherwise compare distant pairs within GPSc
 
 uniqueIds <- apply(all_switches2,1, function(x){
   unique_id = paste(sort(c(x['ID1'], x['ID2'])), collapse='_')
@@ -187,18 +177,20 @@ all_switches2 <- cbind.data.frame(all_switches2,'uniqueIds'=uniqueIds)
 
 all_switches2 <- all_switches2 %>%
   group_by(uniqueIds) %>%
-  mutate(pair_rep=row_number()) %>%
+  mutate(pair_rep=row_number(),
+         ID1= gsub("\\'","",ID1),
+         ID2= gsub("\\'","",ID2)) %>%
     ungroup() %>%
  filter(pair_rep==1) 
 
-gene_freqN <- apply(a1[, -c(1:15)],1, sum, na.rm=T) #These are the very common or very rare genes, NOT the intermediate freq
-
-gene_freq <- apply(a1[, -c(1:15)],1, sum, na.rm=T)/ (ncol(a1)-15) #These are the very common or very rare genes, NOT the intermediate freq
+# gene_freqN <- apply(a1[, -c(1:15)],1, sum, na.rm=T) #These are the very common or very rare genes, NOT the intermediate freq
+# 
+# gene_freq <- apply(a1[, -c(1:15)],1, sum, na.rm=T)/ (ncol(a1)-15) #These are the very common or very rare genes, NOT the intermediate freq
 
 #Compare pairs of strains
 
-
 compare.fun <- function(switchN){
+  
   
   col.strain1 <- grep( paste0(all_switches2$ID1[switchN],'.velvet'),colnames(a1))
   
@@ -209,45 +201,55 @@ compare.fun <- function(switchN){
   sg1 <- str_extract(all_switches2$sero1[switchN], regexp)
   sg2 <- str_extract(all_switches2$sero2[switchN], regexp)  
   
-  b1 <- a1[, c(1:3,col.strain1, col.strain2 )]
-  names(b1) <- c('Gene','Non.unique.Gene.name', 'Annotation', 'Gene_Pres_A', 'Gene_Pres_B')
-  b1[,4][is.na(b1[,4])] <-   0
-  b1[,5][is.na(b1[,5])] <-   0
-  
+  b1 <- a1 %>%
+    select(Gene,Non.unique.Gene.name,Annotation, all_of(col.strain1),all_of(col.strain2)) 
+   
+
   b1$stA =all_switches2$sero1[switchN]
   b1$stB =all_switches2$sero2[switchN]
   
   b1$idA =colnames(a1)[col.strain1]
   b1$idB =colnames(a1)[col.strain2]
 
-  if(length(which(b1[,4] != b1[,5])) > 0){
+  if(nrow(b1)>0){
+      names(b1)[4:5] =  c('Gene_Pres_A', 'Gene_Pres_B')
+       b1[,4][is.na(b1[,4])] <-   0
+      b1[,5][is.na(b1[,5])] <-   0
     c1 <- b1[b1[,4] != b1[,5] & !is.na(b1[,4]), ]
     c1$change_serogrp <- 1*(sg1 != sg2 )
   }else{
     c1 <- NULL
   }
+  
   return(c1)
 }
 
-unique.genes.ls <- lapply(1:nrow(all_switches2), compare.fun)
+unique.genes.ls <- pblapply(1:nrow(all_switches2), compare.fun)
 unique.genes <- bind_rows(unique.genes.ls)
 
 #sort(table(unique.genes$Annotation), decreasing=T)
 
 cog_freq <- unique.genes %>%
-    group_by(Gene, Annotation,change_serogrp) %>%
+  mutate(change_st= if_else(stA!=stB,1,0)) %>%
+    group_by(Gene, Annotation,change_st) %>%
     summarise('cog_freq'=n()) %>%
     arrange(desc(cog_freq)) %>%
-    mutate(change_serogrp= paste0('sg_change_', change_serogrp))
+    mutate(change_st= paste0('st_change_', change_st))
 
-cog_freq.c <- reshape2::dcast(cog_freq, Gene+Annotation ~ change_serogrp) %>%
-  filter(sg_change_1 + sg_change_0 >=20) %>%
-  mutate(ratio= sg_change_1/sg_change_0)
+#this evaluates how often we see discordance in the locus if closest neighbor is a ST switch or not.
+
+cog_freq.c <- reshape2::dcast(cog_freq, Gene+Annotation ~ change_st) %>%
+  filter(st_change_1 + st_change_0 >=20) %>%
+  mutate(ratio= (st_change_1/sum(all_switches2$change_st==1))/(st_change_0/sum(all_switches2$change_st==0))) %>%
+  arrange(-ratio)
+
+View(cog_freq.c)
 
 
 
 ```
 Interesting ones:
+
 group_11429 spermidine synthase found in 53 SG changes, 1 non SG change; This is part of polyamine biosynthesis, which has been linked to CPS expression https://www.ncbi.nlm.nih.gov/pmc/articles/PMC5872165/
 for other related compounds " Characterization of ΔspeA indicates reduced galactose to glucose interconversion via the Leloir pathway. This in turn will limit the availability of UDP-galactose, a precursor of serotype 4 CPS, and UDP-N-acetylglucosamine (UDP-GlcNAc), a nucleotide sugar precursor that is at the intersection of CPS and peptidoglycan repeat unit biosynthesis" https://www.ncbi.nlm.nih.gov/pmc/articles/PMC7990898/
 
@@ -257,71 +259,19 @@ group_16274 family 2 glycosyl transferase
 
 maybe: thioredoxin (different alleles, some associated with cps switch)
 
-#### less interesting (does nto show up on other analysis below) 
 
-uracil-DNA glycosylase ung
-
-
-group_15047 VncR response regulator  the response regulator of the vancomycin resistance locus; regulates CPS production: https://www.frontiersin.org/articles/10.3389/fmicb.2019.02279/full; influences response to serum exposure--this is a common gene; but we are detecting a specific allele.
-
-glyA serine hydroxymethyltransferase--this is a common gene; but we are detecting a specific allele present at ~30%.
-
-group_11218 serine hydroxymethyltransferase
-
-kpsT_1 ABC transporter ATP-binding protein (ON the CPS locus) https://academic.oup.com/femsle/article/149/1/1/529951
-
-
-cbiO_1 putative histone acetyltransferase/ cobalt transporter  --evaluated in Jason's paper: https://www.ncbi.nlm.nih.gov/pmc/articles/PMC8208518/
-	cbi0-cobalt ABC transporter ATP-binding protein
-
-comA, comB: competence factor transporting ATP-binding protein/permease ComA
-
-
-16S ribosomal RNA methyltransferase RsmE: involved in tet resistance (https://journals.asm.org/doi/10.1128/mBio.01344-20)
-
-acetyltransferase GNAT family ; essential for virulence in lung: https://www.ncbi.nlm.nih.gov/pmc/articles/PMC2788772/
-
-
-## How to do this analysis correctly
-- Need to have all pairwise relationships within clade, including those that switch and those that didn't
-- then have a 0/1 for discordance at each location
---or more simply, calculate proportion of isolates with the COG and proportion of SG switches ith the COG
-
-
-```{r}
-
-
-overall_cog_freq <- cbind.data.frame('Gene'=a1$Gene , 'Annotation'=a1$Annotation, gene_freq,gene_freqN)
-
-
-cog_freq.c2 <- merge(cog_freq.c,overall_cog_freq , by=c('Gene','Annotation')) %>%
-  mutate(gene_freq_switch= sg_change_0 + sg_change_1, 
-         gene_freq_noswitch = gene_freqN -gene_freq_switch ,
-         gene_prop_noswitch = gene_freq_noswitch/13453, 
-         gene_prop_switch = gene_freq_switch/264 ,
-         ratio_any_switch= gene_prop_switch/gene_prop_noswitch  ) %>%
-        filter(ratio_any_switch>0 & ratio_any_switch<1000) %>%
-  arrange(-ratio_any_switch)
-
-View(cog_freq.c2)
-
-plot(log(cog_freq.c2$ratio_any_switch), cog_freq.c2$gene_freq)
-
-p1 <- ggplot(cog_freq.c2 , aes(x=gene_freq, y=sg_change_1, text=Annotation))+ 
-       geom_point()+
-       theme_classic()
-ggplotly(p1)
-```
 
 Thioredoxin https://www.ncbi.nlm.nih.gov/pmc/articles/PMC3914529/ group_9046, group_9050
 
 	
-group_9246,group_9247 glycerophosphoryl diester phosphodiesterase "codes for a plasma membrane glycerophosphoryl diester phosphodiesterase (EC 3.1.4.46), an enzyme of the glycerophospholipid metabolism pathway involved in the production of glycerol-3-phosphate along with choline or ethanolamine from glycerophosphocholine or glycerophosphoethanolamine, respectively "https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4652380/"
+## new analysis leads
+lacG 	 6-phospho-beta-galactosidase (also group_9715)
+lacE-2
+lacT
 
-Spermidine synthase group11429
 
 ```{r}
-glyc <- a1 %>% filter(Gene=='group_11429') %>%
+glyc <- a1 %>% filter(Gene=='potD_2') %>%
   select(starts_with("X")) %>%
   t() %>%
   as.data.frame() 
@@ -336,13 +286,15 @@ glyc <- glyc %>%
 
 metads.st <- lapply(metads, function(x)
                     x %>%
-                      select(ID, ERR,In_Silico_Serotype ) %>%
+                      select(ID, In_Silico_Serotype ) %>%
                       mutate(In_Silico_Serotype=as.character(In_Silico_Serotype))%>%
                       rename(st=In_Silico_Serotype)
                     ) %>%
                      bind_rows()%>%
                     mutate(ID =gsub('#','.',ID), ID =gsub('_','.',ID) )
-glyc2 <- merge(glyc,metads.st, by='ID', all=T )
+
+glyc2 <- merge(glyc,metads.st, by='ID', all=T ) %>%
+  filter(!is.na(st)) #some isolates found on a1, not found on metadata file
 
 
 t1 <- glyc2 %>%
@@ -353,7 +305,9 @@ t1 <- glyc2 %>%
 
 ps_comp <- read.csv('https://raw.githubusercontent.com/weinbergerlab/sero_switch_paper/master/Data/ps_composition.csv')
 
-t1 <- merge(t1, ps_comp, by.x='st', by.y='Serotype')
+t1 <- merge(t1, ps_comp, by.x='st', by.y='Serotype') %>%
+    arrange(-percent_with_glyc2)
+
 
 flextable(t1)
 write.csv(t1,'./results/sperm_presence.csv')
@@ -363,7 +317,7 @@ write.csv(t1,'./results/sperm_presence.csv')
 pull out spermidine  discordant pairs
 ```{r}
 glyc3 <- unique.genes %>%
-  filter(Gene=='group_11429') %>%
+  filter(Gene=='potD_2') %>%
   select(Gene,stA, Gene_Pres_A,stB,Gene_Pres_B)
 
 glyc3 <- merge(glyc3, ps_comp, by.x='stA', by.y='Serotype')
