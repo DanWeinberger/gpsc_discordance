@@ -70,22 +70,7 @@ for(i in 1:length(gpcs.test)){
 metads.df <- bind_rows(metads)
 ```
 
-## classify the samples based on a cutpoint
-```{r}
-# tree.cutter<-function(tree.list, cutpoint){
-#   test1<-as_hclust_fixed(tree.list)
-#   test2<-cutree(test1, h=cutpoint)
-#   test3<-as.data.frame(test2)
-#   names(test3)<-'tree.grp'
-#   test3$ID<-row.names(test3)
-#   return(test3)
-# }
-# 
-# tree.grps200<-lapply(trees.to.cut,tree.cutter,cutpoint=100)
-
-```
-
-Distance matrix
+## Distance matrix
 Generate a distance matrix based on the phylogenetic tree. Then identify the closest neighbors of switched variants on same part of the tree (based on the tree.cut)
 
 ```{r, eval=F}
@@ -106,8 +91,11 @@ distance_mat_fun <- function(tree.ds, meta.ds){
     rename(ID1=Var1, ID2=Var2, distance=value,sero1=In_Silico_Serotype.x, sero2=In_Silico_Serotype.y,
          phylo_grp1=phylo.grp.x, phylo_grp2=phylo.grp.y  ) %>%
           mutate( change_st = if_else(sero1 != sero2,1,0))%>%
-              filter(distance>0 )  #keep if change ST, remove diagonal
+              filter(distance>0 ) %>%  #keep if change ST, remove diagonal
+      filter(distance>=0.0728) # min distance for between SG switch
 
+
+  
   closest_match_no_switch <- dist.t1.m %>%
     filter(sero1 == sero2) %>%
     arrange(ID1, sero1, sero2,distance, .by_group = TRUE) %>%
@@ -141,10 +129,33 @@ all_switches.ls <- pbmapply(FUN=distance_mat_fun, tree.ds=trees,meta.ds=metads, 
 all_switches <- bind_rows(all_switches.ls) #there are more than 13K because some strains show up in column A both for ST switch and non-ST switch
 
 write.csv(all_switches, './results/all_switches.csv' )
+
+
+#There are instances where multiple strains of same Serotype matched to same ref. just pick the closest match
+  regexp <- "[[:digit:]]+"
+
+all_switches_dedup <- all_switches %>%
+  arrange(ID2, sero1, phylo_grp2, distance) %>%
+  group_by(ID2, sero1, phylo_grp2) %>%
+  mutate(repN =row_number(), 
+         sg1 = str_extract(sero1, regexp),
+         sg2 = str_extract(sero2, regexp),
+         change_sg = if_else(sg1!=sg2,1,0)) %>%
+  filter(repN==1) %>%
+  ungroup()
+
+#When there is a serogroup change, min distance is 0.07
+#all_switches_dedup %>% group_by(change_sg) %>% summarize(distance=range(distance))
+
+
+write.csv(all_switches_dedup, './results/all_switches_dedup.csv' )
+
+
+
 ```
 
 ```{r}
-all_switches <- read.csv( './results/all_switches.csv' )
+all_switches <- read.csv( './results/all_switches_dedup.csv' )
 
 ```
 
@@ -237,7 +248,11 @@ compare.fun <- function(switchN){
 }
 
 unique.genes.ls <- pblapply(1:nrow(all_switches2), compare.fun)
-unique.genes <- bind_rows(unique.genes.ls)
+
+unique.genes <- bind_rows(unique.genes.ls) %>%
+      group_by(Gene) %>%
+      mutate(N_stA = length(unique(stA)) , N_stB = length(unique(stB)) ) %>%
+  filter(N_stA>1 & N_stB>1) #if gene is only associated with 1 serotype, get rid of it
 
 #sort(table(unique.genes$Annotation), decreasing=T)
 
@@ -246,16 +261,17 @@ cog_freq <- unique.genes %>%
     group_by(Gene, Annotation, change_serogrp) %>%
     summarise('cog_freq'=n()) %>%
     arrange(desc(cog_freq)) %>%
-    mutate(change_serogrp= paste0('sg_change_', change_serogrp))
+    mutate(change_serogrp= paste0('sg_change_', change_serogrp)) %>%
+    ungroup() 
+   
 
 #this evaluates how often we see discordance in the locus if closest neighbor is a ST switch or not.
 
-cog_freq.c <- reshape2::dcast(D, Gene+Annotation ~ change_serogrp) %>%
-  filter(sg_change_1 + sg_change_0 >=20) %>%
+cog_freq.c <- reshape2::dcast(cog_freq, Gene+Annotation ~ change_serogrp) %>%
+  filter(sg_change_1 + sg_change_0 >=10) %>%
   mutate(ratio= (sg_change_1/sum(all_switches2$change_serogrp==1))/(sg_change_0/sum(all_switches2$change_serogrp==0))) %>%
   arrange(-ratio)
 
-View(cog_freq.c)
 
 
 cog_freq.c.filtered <- cog_freq.c %>%
@@ -266,6 +282,8 @@ cog_freq.c.filtered <- cog_freq.c %>%
          
          ) %>%
   filter(phage==0 & hypothetical==0 & transposase==0 & caps==0 )
+
+View(cog_freq.c.filtered)
 
 ```
 Interesting ones:
@@ -299,7 +317,7 @@ UDP-galactopyranose mutase
 
 
 ```{r}
-glyc <- a1 %>% filter(Gene=='zmpC') %>%
+glyc <- a1 %>% filter(Gene=='group_12259') %>%
   select(starts_with("X")) %>%
   t() %>%
   as.data.frame() 
@@ -345,7 +363,7 @@ write.csv(t1,'./results/sperm_presence.csv')
 pull out spermidine  discordant pairs
 ```{r}
 glyc3 <- unique.genes %>%
-  filter(Gene=='zmpC' & stA != stB) %>%
+  filter(Gene=='group_12259')  %>%
   select(Gene,stA, Gene_Pres_A,stB,Gene_Pres_B, idA, idB)
 
 glyc3 <- merge(glyc3, ps_comp, by.x='stA', by.y='Serotype')
@@ -377,7 +395,7 @@ unique.genes2 <- unique.genes %>%
   select(idA, idB, stA, stB,Gene,gene_change, change_serogrp,Annotation,Non.unique.Gene.name) %>%
   group_by(Gene) %>%
   mutate(geneN =n()) %>%
-  filter(geneN>=20)
+  filter(geneN>=10)
 
   unique.genes2.c <- dcast(unique.genes2, idA+ idB+ stA+ stB +change_serogrp ~ Gene , value.var='gene_change') %>%
     replace(is.na(.), 0)
@@ -388,7 +406,7 @@ unique.genes2 <- unique.genes %>%
   library(glmnet)
   
   #ridge regression
-cv.lasso <- cv.glmnet(x, y, family = "binomial",type.measure="class", nfolds=10)
+cv.lasso <- cv.glmnet(x, y, family = "binomial", nfolds=10)
 
 #plot(cv.lasso)
 
@@ -410,3 +428,5 @@ write.csv(coefs.mod1, './Results/ridge_coefficients.csv')
 ```
 
 
+## issues
+There are a lot of repeats. e.g., multiple different srtains matched to same ref. If have 2 clades within GPSC, with 2 distinct serotypes, this would be repeating measures. could restrict so that by GPSC, there is a single pair for stA matched to strainB. 
