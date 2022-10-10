@@ -317,7 +317,7 @@ UDP-galactopyranose mutase
 
 
 ```{r}
-glyc <- a1 %>% filter(Gene=='group_12259') %>%
+glyc <- a1 %>% filter(Gene=='glpK') %>%
   select(starts_with("X")) %>%
   t() %>%
   as.data.frame() 
@@ -363,7 +363,7 @@ write.csv(t1,'./results/sperm_presence.csv')
 pull out spermidine  discordant pairs
 ```{r}
 glyc3 <- unique.genes %>%
-  filter(Gene=='group_12259')  %>%
+  filter(Gene=='glpK')  %>%
   select(Gene,stA, Gene_Pres_A,stB,Gene_Pres_B, idA, idB)
 
 glyc3 <- merge(glyc3, ps_comp, by.x='stA', by.y='Serotype')
