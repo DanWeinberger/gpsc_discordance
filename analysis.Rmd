@@ -145,6 +145,8 @@ all_switches_dedup <- all_switches %>%
   filter(repN==1) %>%
   ungroup()
 
+
+
 #When there is a serogroup change, min distance is 0.07
 #all_switches_dedup %>% group_by(change_sg) %>% summarize(distance=range(distance))
 
@@ -431,3 +433,11 @@ write.csv(coefs.mod1, './Results/ridge_coefficients.csv')
 
 ## issues
 There are a lot of repeats. e.g., multiple different srtains matched to same ref. If have 2 clades within GPSC, with 2 distinct serotypes, this would be repeating measures. could restrict so that by GPSC, there is a single pair for stA matched to strainB. 
+
+Example, in GPSC30: 15531_5#88 (10A) matches with 6 different serotypes:
+15531_5#60: 10F
+14520_6#48: 19F
+15531_2#45: 35F
+12162_1#95: 9V
+9789_2#8: 6A
+15731_8#61: 6B
