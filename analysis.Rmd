@@ -67,7 +67,8 @@ for(i in 1:length(gpcs.test)){
      mutate (ID=as.character(ID), In_Silico_Serotype= as.character(In_Silico_Serotype))
 } 
 
-metads.df <- bind_rows(metads)
+metads.df <- bind_rows(metads) 
+#t
 ```
 
 ## Distance matrix
