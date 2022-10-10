@@ -75,6 +75,8 @@ metads.df <- bind_rows(metads)
 Generate a distance matrix based on the phylogenetic tree. Then identify the closest neighbors of switched variants on same part of the tree (based on the tree.cut)
 
 ```{r, eval=F}
+#GPSC30 is #28 on the list
+
 distance_mat_fun <- function(tree.ds, meta.ds){
   
   # for(i in 1:length(trees)){
@@ -84,6 +86,7 @@ distance_mat_fun <- function(tree.ds, meta.ds){
   # print(i)
   
   dist.t1 <- cophenetic.phylo(tree.ds)
+  
   dist.t1.m <- reshape2::melt(dist.t1) %>%
     mutate(Var1= gsub("\\'","", Var1),
            Var2= gsub("\\'","", Var2)) %>%
@@ -107,7 +110,7 @@ distance_mat_fun <- function(tree.ds, meta.ds){
   if( sum(dist.t1.m$change_st)>0 ){
   closest_match_st_switch <- dist.t1.m %>%
     filter(sero1 != sero2) %>%
-    arrange(ID1, sero1, sero2,distance, .by_group = TRUE) %>%
+    arrange(ID1, sero1 ,distance, .by_group = TRUE) %>%
     group_by(ID1, sero1) %>%
       mutate(distance_rank = 1:n(), sero1=as.character(sero1), sero2=as.character(sero2)) %>%
     filter(distance_rank==1 )
@@ -320,7 +323,7 @@ UDP-galactopyranose mutase
 
 
 ```{r}
-glyc <- a1 %>% filter(Gene=='glpK') %>%
+glyc <- a1 %>% filter(Gene=='group_12114') %>%
   select(starts_with("X")) %>%
   t() %>%
   as.data.frame() 
@@ -366,7 +369,7 @@ write.csv(t1,'./results/sperm_presence.csv')
 pull out spermidine  discordant pairs
 ```{r}
 glyc3 <- unique.genes %>%
-  filter(Gene=='glpK')  %>%
+  filter(Gene=='group_12114')  %>%
   select(Gene,stA, Gene_Pres_A,stB,Gene_Pres_B, idA, idB)
 
 glyc3 <- merge(glyc3, ps_comp, by.x='stA', by.y='Serotype')
@@ -381,6 +384,7 @@ write.csv(glyc3,'./results/sperm_pairings.csv')
 
 Regression
 should also adjust for distance
+
 ```{r}
 unique.genes2 <- unique.genes %>%
   mutate(gene_change = if_else(Gene_Pres_A!= Gene_Pres_B,1,0), 
@@ -429,7 +433,12 @@ View(coefs.mod1)
 write.csv(coefs.mod1, './Results/ridge_coefficients.csv')
 
 ```
-
+hierarchical clustering of genes
+```{r}
+library(ade4)
+clusters <- hclust(dist(x))
+plot(clusters)
+```
 
 ## issues
 There are a lot of repeats. e.g., multiple different srtains matched to same ref. If have 2 clades within GPSC, with 2 distinct serotypes, this would be repeating measures. could restrict so that by GPSC, there is a single pair for stA matched to strainB. 
