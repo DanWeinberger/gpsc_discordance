@@ -52,8 +52,8 @@ for(i in 1:length(gpcs.test)){
 ### Import the metadata
 
 ```{r}
+###Import the metadata
 metads <- vector("list",length(gpcs.test))
-
 for(i in 1:length(gpcs.test)){
   metads[[i]]<-read.csv(paste0("microreact/data_gpcs",gpcs.test[i],".csv"))
 } 
@@ -139,13 +139,13 @@ distance_mat_fun <- function(tree.ds, meta.ds){
     filter(distance_rank==1 & distance <0.01)
   
     return(closest_match)
+
   }else{
     return(NULL)
   }
 }
 
 
-#to check, look at phylo group=30; 28th on the list
 
 all_switches.ls <- pbmapply(FUN=distance_mat_fun, tree.ds=trees,meta.ds=grp.assign200, SIMPLIFY = F)
 
@@ -166,6 +166,10 @@ Read in presence/absence
 
 
 
+=======
+Read in presence/absence
+#Source: https://figshare.com/projects/Gladstone_et_al_MGEN_2019/69173
+#freq of cloud genes, etc https://figshare.com/articles/dataset/Roary_count_of_core_and_accessory_genes_of_the_whole_collection/11357828
 ```{r}
 
 # a1 <- read.csv('./Data/gene_presence_absence_minimised.csv')
@@ -173,7 +177,7 @@ Read in presence/absence
 
 a1 <- readRDS('./Data/gene_presence_absence_minimised.rds') #this dataset has ALL COGS, not jus int freq
 
- 
+
 #Identify and deduplicate StA=1, STB=2 vs StA=2 STB=1 
 all_switches2 <- all_switches %>%
   mutate(ID1 =  gsub('#','.',ID1), ID2 = gsub('#','.',ID2) )
@@ -193,16 +197,21 @@ all_switches2 <- all_switches2 %>%
 
 gene_freqN <- apply(a1[, -c(1:15)],1, sum, na.rm=T) #These are the very common or very rare genes, NOT the intermediate freq
 
+all_switches2 <- all_switches2
+all_switches2$ID2 <- gsub('#','.',all_switches2$ID2)
+all_switches2$ID1 <- gsub('#','.',all_switches2$ID1)
+
+
 gene_freq <- apply(a1[, -c(1:15)],1, sum, na.rm=T)/ (ncol(a1)-15) #These are the very common or very rare genes, NOT the intermediate freq
 
 #Compare pairs of strains
-
 
 compare.fun <- function(switchN){
   
   col.strain1 <- grep( paste0(all_switches2$ID1[switchN],'.velvet'),colnames(a1))
   
   col.strain2 <- grep( paste0(all_switches2$ID2[switchN],'.velvet'),colnames(a1))
+
 
   regexp <- "[[:digit:]]+"
 
@@ -221,6 +230,7 @@ compare.fun <- function(switchN){
   b1$idB =colnames(a1)[col.strain2]
 
   if(length(which(b1[,4] != b1[,5])) > 0){
+
     c1 <- b1[b1[,4] != b1[,5] & !is.na(b1[,4]), ]
     c1$change_serogrp <- 1*(sg1 != sg2 )
   }else{
@@ -243,7 +253,6 @@ cog_freq <- unique.genes %>%
 cog_freq.c <- reshape2::dcast(cog_freq, Gene+Annotation ~ change_serogrp) %>%
   filter(sg_change_1 + sg_change_0 >=20) %>%
   mutate(ratio= sg_change_1/sg_change_0)
-
 
 
 ```
@@ -292,7 +301,6 @@ acetyltransferase GNAT family ; essential for virulence in lung: https://www.ncb
 
 
 overall_cog_freq <- cbind.data.frame('Gene'=a1$Gene , 'Annotation'=a1$Annotation, gene_freq,gene_freqN)
-
 
 cog_freq.c2 <- merge(cog_freq.c,overall_cog_freq , by=c('Gene','Annotation')) %>%
   mutate(gene_freq_switch= sg_change_0 + sg_change_1, 
@@ -372,6 +380,7 @@ glyc3 <- merge(glyc3, ps_comp, by.x='stB', by.y='Serotype')
 View(glyc3)
 
 write.csv(glyc3,'./results/sperm_pairings.csv')
+
 
 ```
 
