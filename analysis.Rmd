@@ -28,6 +28,7 @@ library(httr)
 library(phylogram)
 library(dendextend)
 
+#IMPORTANT NOTE: according to Steph Lo (via Chrispin), distances are not on same scale across trees, so we can't use a universal cutoff 
 for(i in gpcs.test){
 path <- paste0("https://microreact.org/api/viewer/tree?project=gpsGPSC",i)
 path2<-paste0("https://microreact.org/api/viewer/data?project=gpsGPSC",i)
@@ -49,10 +50,6 @@ for(i in 1:length(gpcs.test)){
 }  
 
 
-for(i in 1:length(trees)){
-  print(i)
-print( grep("9789_3#60", trees$tip.label))
-}
 ```
 
 ### Import the metadata
@@ -78,7 +75,11 @@ Generate a distance matrix based on the phylogenetic tree. Then identify the clo
 #GPSC30 is #28 on the list
 
 distance_mat_fun <- function(tree.ds, meta.ds){
+
   
+  
+    regexp <- "[[:digit:]]+"
+
   # for(i in 1:length(trees)){
   # 
   # tree.ds=trees[[i]]
@@ -94,12 +95,33 @@ distance_mat_fun <- function(tree.ds, meta.ds){
   left_join(  meta.ds, by = c("Var2" = "ID")) %>%
     rename(ID1=Var1, ID2=Var2, distance=value,sero1=In_Silico_Serotype.x, sero2=In_Silico_Serotype.y,
          phylo_grp1=phylo.grp.x, phylo_grp2=phylo.grp.y  ) %>%
-          mutate( change_st = if_else(sero1 != sero2,1,0))%>%
-              filter(distance>0 ) %>%  #keep if change ST, remove diagonal
-      filter(distance>=0.0728) # min distance for between SG switch
+          mutate( change_st = if_else(sero1 != sero2,1,0),
+                  sg1 = str_extract(sero1, regexp),
+                  sg2 = str_extract(sero2, regexp), 
+                 sg1 = if_else(sero1=='NT','0', sg1),
+                 sg2 = if_else(sero2=='NT','0', sg2),
+                  sg_switch= if_else(sg1 != sg2,1,0)) %>%
+              filter(distance>0 ) 
 
+
+  #Filter based on minimum distance for between serogroup switches within the GPSC group
+  if(max(dist.t1.m$sg_switch, na.rm=T)==1 & min(dist.t1.m$sg_switch, na.rm=T)==0){
+  
+  min_dist_sg_switch <- dist.t1.m %>%  #keep if change ST, remove diagonal
+        mutate(sg1 = str_extract(sero1, regexp),
+         sg2 = str_extract(sero2, regexp), sg_switch= if_else(sg1 != sg2,1,0)) %>%
+            filter(sg_switch==1) %>%
+    summarize(min_dist=min(distance, na.rm=T))
+    
+      dist.t1.m <- dist.t1.m %>%
+    filter(distance >= min_dist_sg_switch$min_dist)
 
   
+      #filter(distance>=0.0728) # min distance for between SG switch
+##all_switches_dedup %>% group_by(change_sg) %>% summarize(distance=range(distance))
+
+    if(max(dist.t1.m$sg_switch, na.rm=T)==1 & min(dist.t1.m$sg_switch, na.rm=T)==0){
+
   closest_match_no_switch <- dist.t1.m %>%
     filter(sero1 == sero2) %>%
     arrange(ID1, sero1, sero2,distance, .by_group = TRUE) %>%
@@ -107,7 +129,6 @@ distance_mat_fun <- function(tree.ds, meta.ds){
       mutate(distance_rank = 1:n(), sero1=as.character(sero1), sero2=as.character(sero2)) %>%
     filter(distance_rank==1 )
      
-  if( sum(dist.t1.m$change_st)>0 ){
   closest_match_st_switch <- dist.t1.m %>%
     filter(sero1 != sero2) %>%
     arrange(ID1, sero1 ,distance, .by_group = TRUE) %>%
@@ -118,9 +139,13 @@ distance_mat_fun <- function(tree.ds, meta.ds){
     closest_match <- bind_rows(closest_match_st_switch,closest_match_no_switch)
   
   }else{
-   closest_match <- closest_match_no_switch
+   closest_match <- NULL
 
   }
+  }else{
+    closest_match <- NULL
+  }
+  #}
     return(closest_match)
  
 }
@@ -136,7 +161,6 @@ write.csv(all_switches, './results/all_switches.csv' )
 
 
 #There are instances where multiple strains of same Serotype matched to same ref. just pick the closest match
-  regexp <- "[[:digit:]]+"
 
 all_switches_dedup <- all_switches %>%
   arrange(ID2, sero1, phylo_grp2, distance) %>%
@@ -174,6 +198,8 @@ Read in presence/absence
 
 ## NOTES
 For this analysis, consider a within-serogroup switch as same as a pair of same serotype. This contributes to background level of exchange but not likely under metabolic selection due to similarities in CPS
+
+
 ```{r}
 
 # a1 <- read.csv('./Data/gene_presence_absence_minimised.csv')
@@ -184,8 +210,8 @@ a1 <- readRDS('./Data/gene_presence_absence_minimised.rds') #this dataset has AL
  
 #Identify and deduplicate StA=1, STB=2 vs StA=2 STB=1 
 all_switches2 <- all_switches %>%
-  mutate(ID1 =  gsub('#','.',ID1), ID2 = gsub('#','.',ID2) ) %>%
-  filter(distance < 1) #THIS FILTER IS VERY IMPORTANT!!! Otherwise compare distant pairs within GPSc
+  mutate(ID1 =  gsub('#','.',ID1), ID2 = gsub('#','.',ID2) ) #%>%
+#  filter(distance < 1000) #note cannot use a filter like this because distance not on same scale across the trees
 
 uniqueIds <- apply(all_switches2,1, function(x){
   unique_id = paste(sort(c(x['ID1'], x['ID2'])), collapse='_')
@@ -264,7 +290,7 @@ unique.genes <- bind_rows(unique.genes.ls) %>%
 
 cog_freq <- unique.genes %>%
   mutate(change_st= if_else(stA!=stB,1,0)) %>%
-    group_by(Gene, Annotation, change_serogrp) %>%
+    group_by(Gene, Annotation,Non.unique.Gene.name, change_serogrp) %>%
     summarise('cog_freq'=n()) %>%
     arrange(desc(cog_freq)) %>%
     mutate(change_serogrp= paste0('sg_change_', change_serogrp)) %>%
@@ -273,7 +299,7 @@ cog_freq <- unique.genes %>%
 
 #this evaluates how often we see discordance in the locus if closest neighbor is a ST switch or not.
 
-cog_freq.c <- reshape2::dcast(cog_freq, Gene+Annotation ~ change_serogrp) %>%
+cog_freq.c <- reshape2::dcast(cog_freq, Gene+Annotation +Non.unique.Gene.name~ change_serogrp) %>%
   filter(sg_change_1 + sg_change_0 >=10) %>%
   mutate(ratio= (sg_change_1/sum(all_switches2$change_serogrp==1))/(sg_change_0/sum(all_switches2$change_serogrp==0))) %>%
   arrange(-ratio)
@@ -281,15 +307,18 @@ cog_freq.c <- reshape2::dcast(cog_freq, Gene+Annotation ~ change_serogrp) %>%
 
 
 cog_freq.c.filtered <- cog_freq.c %>%
-  mutate(phage=grepl('phage',Annotation),
+  mutate(gene.annotate=toupper(paste(Gene, Annotation,Non.unique.Gene.name)),
+         phage=grepl('phage',Annotation),
          hypothetical=grepl('hypothetical',Annotation),
          transposase=grepl('transposase',Annotation),
-         caps= grepl('caps',Annotation) + grepl('WZ',toupper(Annotation)) + grepl('WC',toupper(Annotation))
-         
+         caps= grepl('CAPS',gene.annotate) + grepl('WZ',gene.annotate) + grepl('CPS',gene.annotate) + grepl('WC', gene.annotate) + grepl('RML',gene.annotate) + grepl('MNA',gene.annotate) + grepl('UGD',gene.annotate) + grepl('GLF',gene.annotate)
+
          ) %>%
   filter(phage==0 & hypothetical==0 & transposase==0 & caps==0 )
 
 View(cog_freq.c.filtered)
+
+write.csv(cog_freq.c.filtered, './Results/cogs_of_interest.csv')
 
 ```
 Interesting ones:
@@ -323,7 +352,7 @@ UDP-galactopyranose mutase
 
 
 ```{r}
-glyc <- a1 %>% filter(Gene=='group_12114') %>%
+glyc <- a1 %>% filter(Gene=='tagA') %>%
   select(starts_with("X")) %>%
   t() %>%
   as.data.frame() 
@@ -433,6 +462,7 @@ View(coefs.mod1)
 write.csv(coefs.mod1, './Results/ridge_coefficients.csv')
 
 ```
+
 hierarchical clustering of genes
 ```{r}
 library(ade4)
@@ -450,3 +480,60 @@ Example, in GPSC30: 15531_5#88 (10A) matches with 6 different serotypes:
 12162_1#95: 9V
 9789_2#8: 6A
 15731_8#61: 6B
+
+## Market basket
+Set up as a MB analysis. each pair is a transaction, items selected are discordant items. we can then see what is eelected with CPS variants (or serogroup switch)
+..identify rules associated with CAPS change
+```{r}
+library(arules)
+library(arulesViz)
+
+unique.genes.items <- unique.genes %>%
+  ungroup() %>%
+  #filter(change_serogrp == 1) %>%
+  mutate(ID = paste(idA, idB, stA, stB, sep='_'), 
+         geneID=toupper(paste(Gene, Annotation,Non.unique.Gene.name, sep='_')),
+           exclude= grepl('CAPS',geneID) + grepl('WZ',geneID) + grepl('CPS',geneID) + grepl('WC', geneID) + grepl('RML',geneID) + grepl('MNA',geneID) + grepl('UGD',geneID) + grepl('GLF',geneID) + grepl('GLYCOSYL TRANSFERASE',geneID)
+         + grepl('GCT',geneID)+ grepl('GLF',geneID) + grepl('RML',geneID) + grepl('FLIPPASE',geneID)+ grepl('DEHYDRORHAMNOSE',geneID)+ grepl('MANNOSAMINE',geneID) + grepl('TRANSPOSASE',geneID)+ grepl('HYPOTHETICAL',geneID)+ grepl('ACETYLTRANSFERACE',geneID), 
+            geneID = if_else(exclude>=1, 'exclude',geneID) ) %>%
+  filter(geneID != 'exclude') %>%
+  select(ID, geneID,change_serogrp) %>%
+  unique() #deduplicate
+
+unique.genes.items1 <- unique.genes.items %>% select(ID, geneID)
+
+unique.genes.items2 <- unique.genes.items %>% 
+  select(ID, change_serogrp) %>%
+  mutate(geneID= paste0('change_serogrp',change_serogrp ))%>% 
+  select(ID, geneID) %>%
+  unique()
+
+unique.genes.items3 <- bind_rows(unique.genes.items1, unique.genes.items2)
+
+write.csv(unique.genes.items3,'./Results/transacations.csv',row.names =F)
+
+order_trans <- read.transactions(
+        file = './Results/transacations.csv',
+        format = "single",
+        sep = ",",
+        cols=c(1,2),
+        rm.duplicates = T
+)
+ 
+#itemFrequencyPlot(order_trans,topN=20,type="absolute")
+ 
+ rules <- apriori(order_trans,parameter=list(supp=0.01,conf = 0.5),appearance = list(default="lhs",rhs="change_serogrp1"))
+ 
+
+ rules<-sort(rules, by="confidence", decreasing=TRUE)
+options(digits=2)
+
+inspect(rules[1:100])
+
+#plot(rules, method="graph", shading='lift')
+
+ rules<-sort(rules, by="lift", decreasing=TRUE)
+inspect(rules[1:100])
+
+```
+
