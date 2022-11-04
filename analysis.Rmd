@@ -15,6 +15,11 @@ library(pbapply)
 library(stringr)
 library(plotly)
 library(flextable)
+
+#ps_comp <- read.csv('https://raw.githubusercontent.com/weinbergerlab/sero_switch_paper/master/Data/ps_composition.csv')
+#saveRDS(ps_comp, './Data/ps_composition.rds')
+ps_comp <- readRDS( './Data/ps_composition.rds')
+
 ```
 
 Download all files from microreact. Not all the GPSC seem to have a microreact project associated. the subset below all had files.
@@ -179,14 +184,10 @@ all_switches_dedup <- all_switches %>%
 
 
 write.csv(all_switches_dedup, './results/all_switches_dedup.csv' )
-
-
-
 ```
 
 ```{r}
 all_switches <- read.csv( './results/all_switches_dedup.csv' )
-
 ```
 
 
@@ -218,6 +219,10 @@ uniqueIds <- apply(all_switches2,1, function(x){
   return(unique_id)
 })
 
+ ps_comp_acetyl <- ps_comp %>%
+   mutate(acetyl = if_else(Ac==1 | FucNAc==1 | GalNAc==1 | GlcNAc==1 | ManNAc==1 | ManNAcA==1 | PneNAc==1,1,0)) %>%
+   select(Serotype, acetyl)
+
 all_switches2 <- cbind.data.frame(all_switches2,'uniqueIds'=uniqueIds)
 
   regexp <- "[[:digit:]]+"
@@ -234,7 +239,13 @@ all_switches2 <- all_switches2 %>%
         sg1= if_else(sero1=='NT', 'NT', sg1),
         sg2= if_else(sero2=='NT', 'NT', sg2),
                  change_serogrp = if_else(sg1!=sg2,1,0)
-         )
+         ) %>%
+  left_join(ps_comp_acetyl, by=c('sero1'='Serotype')) %>%
+  rename(acetylA=acetyl) %>%
+  left_join(ps_comp_acetyl, by=c('sero2'='Serotype')) %>%
+  rename(acetylB=acetyl) %>%
+  mutate(change_acetyl = if_else( acetylA!=acetylB,1,0))
+
 
 # gene_freqN <- apply(a1[, -c(1:15)],1, sum, na.rm=T) #These are the very common or very rare genes, NOT the intermediate freq
 # 
@@ -265,6 +276,8 @@ compare.fun <- function(switchN){
   b1$idB =colnames(a1)[col.strain2]
   
   b1$change_serogrp <- 1*(b1$sgA != b1$sgB )
+  
+  b1$change_acetyl <- 1* all_switches2$change_acetyl[switchN]
 
 
   if(nrow(b1)>0){
@@ -311,10 +324,11 @@ cog_freq.c.filtered <- cog_freq.c %>%
          phage=grepl('phage',Annotation),
          hypothetical=grepl('hypothetical',Annotation),
          transposase=grepl('transposase',Annotation),
-         caps= grepl('CAPS',gene.annotate) + grepl('WZ',gene.annotate) + grepl('CPS',gene.annotate) + grepl('WC', gene.annotate) + grepl('RML',gene.annotate) + grepl('MNA',gene.annotate) + grepl('UGD',gene.annotate) + grepl('GLF',gene.annotate)
-
+         caps= grepl('CAPS',gene.annotate) + grepl('WZ',gene.annotate) + grepl('CPS',gene.annotate) + grepl('WC', gene.annotate) + grepl('RML',gene.annotate) + grepl('MNA',gene.annotate) + grepl('UGD',gene.annotate) + grepl('GLF',gene.annotate),
+          exclude= grepl('CAPS',gene.annotate) + grepl('WZ',gene.annotate) + grepl('CPS',gene.annotate) + grepl('WC', gene.annotate) + grepl('RML',gene.annotate) + grepl('MNA',gene.annotate) + grepl('UGD',gene.annotate) + grepl('GLF',gene.annotate) + grepl('GLYCOSYL TRANSFERASE',gene.annotate)
+         + grepl('GCT',gene.annotate)+ grepl('GLF',gene.annotate) + grepl('RML',gene.annotate) + grepl('FLIPPASE',gene.annotate)+ grepl('DEHYDRORHAMNOSE',gene.annotate)+ grepl('MANNOSAMINE',gene.annotate) + grepl('TRANSPOSASE',gene.annotate)+ grepl('HYPOTHETICAL',gene.annotate)+ grepl('ACETYLTRANSFERACE',gene.annotate) + grepl('PGM',gene.annotate) , 
          ) %>%
-  filter(phage==0 & hypothetical==0 & transposase==0 & caps==0 )
+  filter(phage==0 & hypothetical==0 & transposase==0 & caps==0 & exclude==0)
 
 View(cog_freq.c.filtered)
 
@@ -339,6 +353,43 @@ maybe: thioredoxin (different alleles, some associated with cps switch)
 Thioredoxin https://www.ncbi.nlm.nih.gov/pmc/articles/PMC3914529/ group_9046, group_9050
 
 	
+ALSO look at genes discordant between pairs when switching bwteen acetylated and non-acetylated CPS
+	
+```{r}
+
+cog_freq <- unique.genes %>%
+  group_by(Gene, Annotation,Non.unique.Gene.name, change_acetyl) %>%
+  summarise('cog_freq'=n()) %>%
+  arrange(desc(cog_freq)) %>%
+  mutate(change_acetyl= paste0('ac_change_', change_acetyl)) %>%
+  ungroup() 
+
+
+#this evaluates how often we see discordance in the locus if closest neighbor is a ST switch or not.
+
+cog_freq.c <- reshape2::dcast(cog_freq, Gene+Annotation +Non.unique.Gene.name~ change_acetyl) %>%
+  filter(ac_change_1 + ac_change_0 >=10) %>%
+  mutate(ratio= (ac_change_1/sum(all_switches2$change_acetyl==1, na.rm=T))/(ac_change_0/sum(all_switches2$change_acetyl==0, na.rm=T))) %>%
+  arrange(-ratio)
+
+
+
+cog_freq.c.filtered <- cog_freq.c %>%
+  mutate(gene.annotate=toupper(paste(Gene, Annotation,Non.unique.Gene.name)),
+         phage=grepl('phage',Annotation),
+         hypothetical=grepl('hypothetical',Annotation),
+         transposase=grepl('transposase',Annotation),
+         caps= grepl('CAPS',gene.annotate) + grepl('WZ',gene.annotate) + grepl('CPS',gene.annotate) + grepl('WC', gene.annotate) + grepl('RML',gene.annotate) + grepl('MNA',gene.annotate) + grepl('UGD',gene.annotate) + grepl('GLF',gene.annotate),
+         exclude= grepl('CAPS',gene.annotate) + grepl('WZ',gene.annotate) + grepl('CPS',gene.annotate) + grepl('WC', gene.annotate) + grepl('RML',gene.annotate) + grepl('MNA',gene.annotate) + grepl('UGD',gene.annotate) + grepl('GLF',gene.annotate) + grepl('GLYCOSYL TRANSFERASE',gene.annotate)
+         + grepl('GCT',gene.annotate)+ grepl('GLF',gene.annotate) + grepl('RML',gene.annotate) + grepl('FLIPPASE',gene.annotate)+ grepl('DEHYDRORHAMNOSE',gene.annotate)+ grepl('MANNOSAMINE',gene.annotate) + grepl('TRANSPOSASE',gene.annotate)+ grepl('HYPOTHETICAL',gene.annotate)+ grepl('ACETYLTRANSFERACE',gene.annotate) + grepl('PGM',gene.annotate) , 
+  ) %>%
+  filter(phage==0 & hypothetical==0 & transposase==0 & caps==0 & exclude==0)
+
+View(cog_freq.c.filtered)
+write.csv(cog_freq.c.filtered, './Results/cogs_of_interest-acetyl.csv')
+
+```
+	
 ## new analysis leads
 lacG 	 6-phospho-beta-galactosidase (also group_9715)
 lacE-2
@@ -352,7 +403,7 @@ UDP-galactopyranose mutase
 
 
 ```{r}
-glyc <- a1 %>% filter(Gene=='tagA') %>%
+glyc <- a1 %>% filter(Gene=='rluA3') %>%
   select(starts_with("X")) %>%
   t() %>%
   as.data.frame() 
@@ -384,7 +435,6 @@ t1 <- glyc2 %>%
   mutate( percent_with_glyc2 = glyc2_present/N ) %>%
   arrange(-percent_with_glyc2)
 
-ps_comp <- read.csv('https://raw.githubusercontent.com/weinbergerlab/sero_switch_paper/master/Data/ps_composition.csv')
 
 t1 <- merge(t1, ps_comp, by.x='st', by.y='Serotype') %>%
     arrange(-percent_with_glyc2)
@@ -398,7 +448,7 @@ write.csv(t1,'./results/sperm_presence.csv')
 pull out spermidine  discordant pairs
 ```{r}
 glyc3 <- unique.genes %>%
-  filter(Gene=='group_12114')  %>%
+  filter(Gene=='rluA3')  %>%
   select(Gene,stA, Gene_Pres_A,stB,Gene_Pres_B, idA, idB)
 
 glyc3 <- merge(glyc3, ps_comp, by.x='stA', by.y='Serotype')
@@ -424,9 +474,9 @@ unique.genes2 <- unique.genes %>%
     mutate(phage=grepl('phage',gene.annotate),
          hypothetical=grepl('HYPOTHETICAL',gene.annotate),
          transposase=grepl('TRANSPOSASE',gene.annotate),
-         caps= grepl('CAPS',gene.annotate) + grepl('WZ',gene.annotate) + grepl('CPS',gene.annotate) + grepl('WC', gene.annotate) + grepl('RML',gene.annotate) + grepl('MNA',gene.annotate) + grepl('UGD',gene.annotate) + grepl('GLF',gene.annotate) 
-         
-         ) %>%
+          caps= grepl('CAPS',gene.annotate) + grepl('WZ',gene.annotate) + grepl('CPS',gene.annotate) + grepl('WC', gene.annotate) + grepl('RML',gene.annotate) + grepl('MNA',gene.annotate) + grepl('UGD',gene.annotate) + grepl('GLF',gene.annotate),
+          exclude= grepl('CAPS',gene.annotate) + grepl('WZ',gene.annotate) + grepl('CPS',gene.annotate) + grepl('WC', gene.annotate) + grepl('RML',gene.annotate) + grepl('MNA',gene.annotate) + grepl('UGD',gene.annotate) + grepl('GLF',gene.annotate) + grepl('GLYCOSYL TRANSFERASE',gene.annotate)
+         + grepl('GCT',gene.annotate)+ grepl('GLF',gene.annotate) + grepl('RML',gene.annotate) + grepl('FLIPPASE',gene.annotate)+ grepl('DEHYDRORHAMNOSE',gene.annotate)+ grepl('MANNOSAMINE',gene.annotate) + grepl('TRANSPOSASE',gene.annotate)+ grepl('HYPOTHETICAL',gene.annotate)+ grepl('ACETYLTRANSFERACE',gene.annotate) + grepl('PGM',gene.annotate) )  %>%
   filter(phage==0 & hypothetical==0 & transposase==0 & caps==0 ) %>%
   select(idA, idB, stA, stB,Gene,gene_change, change_serogrp,Annotation,Non.unique.Gene.name) %>%
   group_by(Gene) %>%
