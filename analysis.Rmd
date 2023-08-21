@@ -209,6 +209,8 @@ For this analysis, consider a within-serogroup switch as same as a pair of same 
 a1 <- readRDS('./Data/gene_presence_absence_minimised.rds') #this dataset has ALL COGS, not jus int freq
 
  
+
+
 #Identify and deduplicate StA=1, STB=2 vs StA=2 STB=1 
 all_switches2 <- all_switches %>%
   mutate(ID1 =  gsub('#','.',ID1), ID2 = gsub('#','.',ID2) ) #%>%
@@ -335,6 +337,7 @@ View(cog_freq.c.filtered)
 write.csv(cog_freq.c.filtered, './Results/cogs_of_interest.csv')
 
 ```
+
 Interesting ones:
 
 group_11429 spermidine synthase found in 53 SG changes, 1 non SG change; This is part of polyamine biosynthesis, which has been linked to CPS expression https://www.ncbi.nlm.nih.gov/pmc/articles/PMC5872165/
@@ -403,7 +406,7 @@ UDP-galactopyranose mutase
 
 
 ```{r}
-glyc <- a1 %>% filter(Gene=='rluA3') %>%
+glyc <- a1 %>% filter(Gene=='ntpK') %>%
   select(starts_with("X")) %>%
   t() %>%
   as.data.frame() 
@@ -448,7 +451,7 @@ write.csv(t1,'./results/sperm_presence.csv')
 pull out spermidine  discordant pairs
 ```{r}
 glyc3 <- unique.genes %>%
-  filter(Gene=='rluA3')  %>%
+  filter(Gene=='ntpK')  %>%
   select(Gene,stA, Gene_Pres_A,stB,Gene_Pres_B, idA, idB)
 
 glyc3 <- merge(glyc3, ps_comp, by.x='stA', by.y='Serotype')
@@ -512,6 +515,57 @@ View(coefs.mod1)
 write.csv(coefs.mod1, './Results/ridge_coefficients.csv')
 
 ```
+Regression to test association with acetyl
+```{r}
+
+unique.genes2_ac <- unique.genes %>%
+  mutate(gene_change = if_else(Gene_Pres_A!= Gene_Pres_B,1,0), 
+         Annotation=toupper(Annotation), 
+         Gene=toupper(Gene),
+         Non.unique.Gene.name=toupper(Non.unique.Gene.name),
+         gene.annotate = paste(Gene,Non.unique.Gene.name, Annotation )) %>%
+    mutate(phage=grepl('phage',gene.annotate),
+         hypothetical=grepl('HYPOTHETICAL',gene.annotate),
+         transposase=grepl('TRANSPOSASE',gene.annotate),
+          caps= grepl('CAPS',gene.annotate) + grepl('WZ',gene.annotate) + grepl('CPS',gene.annotate) + grepl('WC', gene.annotate) + grepl('RML',gene.annotate) + grepl('MNA',gene.annotate) + grepl('UGD',gene.annotate) + grepl('GLF',gene.annotate),
+          exclude= grepl('CAPS',gene.annotate) + grepl('WZ',gene.annotate) + grepl('CPS',gene.annotate) + grepl('WC', gene.annotate) + grepl('RML',gene.annotate) + grepl('MNA',gene.annotate) + grepl('UGD',gene.annotate) + grepl('GLF',gene.annotate) + grepl('GLYCOSYL TRANSFERASE',gene.annotate)
+         + grepl('GCT',gene.annotate)+ grepl('GLF',gene.annotate) + grepl('RML',gene.annotate) + grepl('FLIPPASE',gene.annotate)+ grepl('DEHYDRORHAMNOSE',gene.annotate)+ grepl('MANNOSAMINE',gene.annotate) + grepl('TRANSPOSASE',gene.annotate)+ grepl('HYPOTHETICAL',gene.annotate)+ grepl('ACETYLTRANSFERACE',gene.annotate) + grepl('PGM',gene.annotate) )  %>%
+  filter(phage==0 & hypothetical==0 & transposase==0 & caps==0 ) %>%
+  select(idA, idB, stA, stB,Gene,gene_change, change_acetyl,Annotation,Non.unique.Gene.name) %>%
+  group_by(Gene) %>%
+  mutate(geneN =n()) %>%
+  filter(geneN>=10)
+
+  unique.genes2_ac.c <- dcast(unique.genes2_ac, idA+ idB+ stA+ stB +change_acetyl ~ Gene , value.var='gene_change') %>%
+    replace(is.na(.), 0)
+  
+  x.ac <- as.matrix(unique.genes2_ac.c[,-c(1:5)])
+  y.ac <- unique.genes2_ac.c$change_acetyl
+  
+  library(glmnet)
+  
+  #ridge regression
+cv.lasso_ac <- cv.glmnet(x.ac, y.ac, family = "binomial", nfolds=10)
+
+#plot(cv.lasso)
+
+mod1_ac <- glmnet(x,y, family='binomial', alpha=0, lambda=cv.lasso$lambda.min ) #alpha=0 is ridge regression
+
+# Display regression coefficients
+gene_key_ac <- unique.genes2_ac %>%
+  select(Annotation, Non.unique.Gene.name, Gene) %>%
+  unique()
+
+coefs.mod1_ac <- cbind.data.frame('coef'=coef(mod1_ac)[,1], 'Gene'=row.names(coef(mod1_ac))) %>%
+  left_join(gene_key_ac, by='Gene') %>%
+  arrange(-coef)
+
+View(coefs.mod1_ac)
+
+write.csv(coefs.mod1_ac, './Results/ridge_coefficients_ac.csv')
+
+```
+
 
 hierarchical clustering of genes
 ```{r}
@@ -585,5 +639,109 @@ inspect(rules[1:100])
  rules<-sort(rules, by="lift", decreasing=TRUE)
 inspect(rules[1:100])
 
+```
+## Simple association: gene +/- vs rhamnose in CPS
+
+do not run this chunk
+```{r, eval=F}
+a1 <- readRDS('./Data/gene_presence_absence_minimised.rds') #this dataset has ALL COGS, not jus int freq
+
+b1 <- a1 %>%
+  select(-No..isolates, -No..sequences,-Avg.sequences.per.isolate,-Genome.Fragment,
+         -Order.within.Fragment,-Accessory.Fragment,
+         -Accessory.Order.with.Fragment, -QC, -Min.group.size.nuc,-Max.group.size.nuc,-Avg.group.size.nuc)
+
+b1.m <- reshape2::melt(b1, id.vars=c('Gene','Non.unique.Gene.name','Annotation')) 
+
+mid_freq <- b1.m %>%
+  group_by(Gene) %>%
+  mutate(N_present=sum(value, na.rm=T), N_isolate=n(), freq=N_present/N_isolate) %>%
+  filter(freq>0.05 & freq<0.95)
+
+mid_freq.c <- dcast(mid_freq, variable ~Gene +Annotation, value.var='value' )
+
+mid_freq.c <- mid_freq.c %>%
+  mutate(variable = gsub('\\.velvet','',variable),
+         variable = gsub('X','',variable),
+         variable = gsub('\\.','#',variable),
+         )
+#X10395_5.10.velvet
+pres_abs <- metads.df %>%
+  left_join(mid_freq.c, by=c('ID'='variable')) %>%
+  replace(is.na(.), 0)
+
+ saveRDS(pres_abs,'./Data/gene_presence_absence_minimised_with meta_data.rds') #this dataset has ALL COGS, not jus int freq
+
+```
+
+
+```{r}
+a1 <- readRDS('./Data/gene_presence_absence_minimised_with meta_data.rds') %>% left_join(ps_comp, by=c('In_Silico_Serotype'='Serotype')) %>%
+  rename(st=In_Silico_Serotype) %>%
+  mutate( Rha = ifelse(st=='23A', 1, Rha) ,  #https://pubmed.ncbi.nlm.nih.gov/28837839
+      
+         Rha = as.factor(ifelse(st=='7C', 1, Rha)) ,  #https://pubmed.ncbi.nlm.nih.gov/29715685/
+)
+
+a1 <- a1 %>%
+  filter(!is.na(Rha))
+
+y=a1$Rha %>% as.numeric()
+x= a1 %>%
+  dplyr::select("ABC-N/P_ABC transporter ATP-binding protein/permease":"zmpD_zinc metalloprotease ZmpD") %>%
+  as.matrix()
+  
+  library(glmnet)
+  
+#ridge regression
+cv.lasso <- cv.glmnet(x, y, family = "binomial", nfolds=10)
+
+#plot(cv.lasso)
+
+mod1 <- glmnet(x,y, family='binomial', alpha=0, lambda=cv.lasso$lambda.min ) #alpha=0 is ridge regression
+
+# Display regression coefficients
+gene_key <- unique.genes2 %>%
+  select(Annotation, Non.unique.Gene.name, Gene) %>%
+  unique()
+
+coefs.mod1 <- cbind.data.frame('coef'=coef(mod1)[,1], 'Gene'=row.names(coef(mod1))) %>%
+  arrange(-coef) # %>%
+#   mutate(
+#     geneID = toupper(Gene),
+# exclude= grepl('CAPS',geneID) + grepl('WZ',geneID) + grepl('CPS',geneID) + grepl('WC', geneID) + grepl('RML',geneID) + grepl('MNA',geneID) + grepl('UGD',geneID) + grepl('GLF',geneID) + grepl('GLYCOSYL TRANSFERASE',geneID)
+#          + grepl('GCT',geneID)+ grepl('GLF',geneID) + grepl('RML',geneID) + grepl('FLIPPASE',geneID)+ grepl('DEHYDRORHAMNOSE',geneID)+ grepl('MANNOSAMINE',geneID) + grepl('TRANSPOSASE',geneID)+ grepl('HYPOTHETICAL',geneID)+ grepl('ACETYLTRANSFERACE',geneID), 
+#             geneID = if_else(exclude>=1, 'exclude',geneID) ) %>%
+#   filter(exclude == 0) 
+
+View(coefs.mod1)
+
+write.csv(coefs.mod1, './Results/ridge_coefficients_Rha.csv')
+```
+
+## Presence absence in the 2 GPSCs used in Anna York's experiments
+
+these represent the MLSs used in Anna's growth experiments.18090 is the ST22F
+```{r}
+a2 <- a1 %>% 
+  dplyr::select(Gene,Non.unique.Gene.name, X18090_1.119.velvet, X19341_2.175.velvet) %>%
+  mutate(Gene=as.character(Gene),
+         Non.unique.Gene.name=as.character(Non.unique.Gene.name),
+         X18090_1.119.velvet= ifelse(is.na(X18090_1.119.velvet),0, X18090_1.119.velvet),
+          X19341_2.175.velvet= ifelse(is.na(X19341_2.175.velvet),0, X19341_2.175.velvet),
+          
+    gene2= if_else(!grepl('group', Gene),Gene,
+  if_else(grepl('group', Gene) & Non.unique.Gene.name!='',Non.unique.Gene.name,
+               Gene)) ,
+  gene3= sub("_.*", "", gene2)
+  ) %>%
+  group_by(gene3) %>%
+  summarize(X18090_1.119.velvet=max(X18090_1.119.velvet),
+            X19341_2.175.velvet=max(X19341_2.175.velvet)) %>%
+  mutate(discordant = if_else(X18090_1.119.velvet==X19341_2.175.velvet,0,1)) %>%
+  filter(discordant==1) %>%
+  rename(st22f=X18090_1.119.velvet, st15b=X19341_2.175.velvet )
+
+write.csv(a2,'./Data/presence_absence.csv')
 ```
 
