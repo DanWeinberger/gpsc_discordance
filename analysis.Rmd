@@ -338,6 +338,35 @@ write.csv(cog_freq.c.filtered, './Results/cogs_of_interest.csv')
 
 ```
 
+```{r}
+# if (!require("BiocManager", quietly = TRUE))
+#     install.packages("BiocManager")
+# 
+# BiocManager::install("ggtree")
+#devtools::install_github("gtonkinhill/panstripe")
+library(panstripe)
+
+gene.mat <- a1 %>%
+   dplyr::select(starts_with('X')) %>%
+  t() 
+
+gene.mat[is.na(gene.mat)] <- 0
+
+strains.ids <- cbind.data.frame('ID'=row.names(gene.mat)) %>%
+     mutate(ID = gsub('\\.velvet','',ID),
+         ID = gsub('X','',ID),
+         ID = gsub('\\.','#',ID)
+     )
+
+gene.mat <- gene.mat[strains.ids$ID %in% metads.df$ID,]
+
+t.p1 <- panstripe::plot_tsne(gene.mat, category = metads.df$In_Silico_Serotype, plot = TRUE, perplexity = 20, pcadims = 50)
+
+
+
+```
+
+
 Interesting ones:
 
 group_11429 spermidine synthase found in 53 SG changes, 1 non SG change; This is part of polyamine biosynthesis, which has been linked to CPS expression https://www.ncbi.nlm.nih.gov/pmc/articles/PMC5872165/
@@ -640,6 +669,8 @@ inspect(rules[1:100])
 inspect(rules[1:100])
 
 ```
+
+
 ## Simple association: gene +/- vs rhamnose in CPS
 
 do not run this chunk
@@ -682,13 +713,20 @@ a1 <- readRDS('./Data/gene_presence_absence_minimised_with meta_data.rds') %>% l
       
          Rha = as.factor(ifelse(st=='7C', 1, Rha)) ,  #https://pubmed.ncbi.nlm.nih.gov/29715685/
 )
+names(a1) <- toupper(names(a1))
 
-a1 <- a1 %>%
-  filter(!is.na(Rha))
 
-y=a1$Rha %>% as.numeric()
-x= a1 %>%
-  dplyr::select("ABC-N/P_ABC transporter ATP-binding protein/permease":"zmpD_zinc metalloprotease ZmpD") %>%
+all.names <- toupper(names(a1))
+non.cps.names.names <- all.names[-c( grep('CAPS',all.names) , grep('WZ',all.names) , grep('CPS',all.names) , grep('WC', all.names) , grep('RML',all.names) , grep('MNA',all.names) , grep('UGD',all.names) , grep('GLF',all.names) , grep('GLYCOSYL TRANSFERASE',all.names), grep('GCT',all.names), grep('GLF',all.names) , grep('RML',all.names) , grep('FLIPPASE',all.names), grep('DEHYDRORHAMNOSE',all.names), grep('MANNOSAMINE',all.names) , grep('TRANSPOSASE',all.names), grep('HYPOTHETICAL',all.names), grep('ACETYLTRANSFERACE',all.names))  ]
+
+
+a1a <- a1 %>%
+  filter(!is.na(RHA)) %>%
+  dplyr::select(all_of(non.cps.names.names))
+
+y=a1a$RHA %>% as.numeric()
+x= a1a %>%
+  dplyr::select("ABC-N/P_ABC TRANSPORTER ATP-BINDING PROTEIN/PERMEASE":"ZMPD_ZINC METALLOPROTEASE ZMPD") %>%
   as.matrix()
   
   library(glmnet)
@@ -716,8 +754,60 @@ coefs.mod1 <- cbind.data.frame('coef'=coef(mod1)[,1], 'Gene'=row.names(coef(mod1
 
 View(coefs.mod1)
 
-write.csv(coefs.mod1, './Results/ridge_coefficients_Rha.csv')
+write.csv(coefs.mod1, './results/ridge_coefficients_Rha.csv')
+
+coefs.mod1 <- read.csv('./results/ridge_coefficients_Rha.csv')
+
 ```
+
+Or try market basket for the same
+```{r}
+
+# x= a1 %>%
+#   dplyr::select("ABC-N/P_ABC transporter ATP-binding protein/permease":"zmpD_zinc metalloprotease ZmpD") %>%
+#   as.matrix()
+
+
+
+unique.genes.items <- unique.genes %>%
+  ungroup() %>%
+  #filter(change_serogrp == 1) %>%
+  mutate(ID = paste(idA, idB, stA, stB, sep='_'), 
+         geneID=toupper(paste(Gene, Annotation,Non.unique.Gene.name, sep='_')),
+           exclude= grepl('CAPS',geneID) + grepl('WZ',geneID) + grepl('CPS',geneID) + grepl('WC', geneID) + grepl('RML',geneID) + grepl('MNA',geneID) + grepl('UGD',geneID) + grepl('GLF',geneID) + grepl('GLYCOSYL TRANSFERASE',geneID)
+         + grepl('GCT',geneID)+ grepl('GLF',geneID) + grepl('RML',geneID) + grepl('FLIPPASE',geneID)+ grepl('DEHYDRORHAMNOSE',geneID)+ grepl('MANNOSAMINE',geneID) + grepl('TRANSPOSASE',geneID)+ grepl('HYPOTHETICAL',geneID)+ grepl('ACETYLTRANSFERACE',geneID), 
+            geneID = if_else(exclude>=1, 'exclude',geneID) ) %>%
+  filter(geneID != 'exclude') %>%
+  select(ID, geneID,change_serogrp) %>%
+  unique() #deduplicate
+
+unique.genes.items1 <- unique.genes.items %>% select(ID, geneID)
+
+unique.genes.items2 <- unique.genes.items %>% 
+  select(ID, change_serogrp) %>%
+  mutate(geneID= paste0('change_serogrp',change_serogrp ))%>% 
+  select(ID, geneID) %>%
+  unique()
+
+unique.genes.items3 <- bind_rows(unique.genes.items1, unique.genes.items2)
+
+write.csv(unique.genes.items3,'./Results/transacations.csv',row.names =F)
+
+order_trans <- read.transactions(
+        file = './Results/transacations.csv',
+        format = "single",
+        sep = ",",
+        cols=c(1,2),
+        rm.duplicates = T
+)
+ 
+#itemFrequencyPlot(order_trans,topN=20,type="absolute")
+ 
+ rules <- apriori(order_trans,parameter=list(supp=0.01,conf = 0.5),appearance = list(default="lhs",rhs="change_serogrp1"))
+ 
+
+```
+
 
 ## Presence absence in the 2 GPSCs used in Anna York's experiments
 
